@@ -2,8 +2,7 @@
 
 use crate::avm1::activation::Activation;
 use crate::avm1::error::Error;
-use crate::avm1::function::{Executable, FunctionObject};
-use crate::avm1::property::Attribute;
+use crate::avm1::property_decl::{define_properties_on, Declaration};
 use crate::avm1::{AvmString, Object, TObject, Value};
 use gc_arena::MutationContext;
 
@@ -12,57 +11,33 @@ use crate::color_transform::ColorTransform;
 use std::convert::Into;
 use swf::Fixed8;
 
-macro_rules! with_color_transform {
-    ($obj: ident, $gc: ident, $fn_proto: ident, $($name: expr => [$get: ident, $set: ident],)*) => {
-        $(
-            $obj.add_property(
-                $gc,
-                $name,
-                FunctionObject::function($gc, Executable::Native($get), Some($fn_proto), $fn_proto),
-                Some(FunctionObject::function($gc, Executable::Native($set), Some($fn_proto), $fn_proto)),
-                Attribute::empty(),
-            );
-        )*
-    }
-}
+const PROTO_DECLS: &[Declaration] = declare_properties! {
+    "alphaMultiplier" => property(get_alpha_multiplier, set_alpha_multiplier);
+    "redMultiplier" => property(get_red_multiplier, set_red_multiplier);
+    "greenMultiplier" => property(get_green_multiplier, set_green_multiplier);
+    "blueMultiplier" => property(get_blue_multiplier, set_blue_multiplier);
+    "alphaOffset" => property(get_alpha_offset, set_alpha_offset);
+    "redOffset" => property(get_red_offset, set_red_offset);
+    "greenOffset" => property(get_green_offset, set_green_offset);
+    "blueOffset" => property(get_blue_offset, set_blue_offset);
+    "rgb" => property(get_rgb, set_rgb);
+    "concat" => method(concat);
+    "toString" => method(to_string);
+};
 
 pub fn constructor<'gc>(
     activation: &mut Activation<'_, 'gc, '_>,
     this: Object<'gc>,
     args: &[Value<'gc>],
 ) -> Result<Value<'gc>, Error<'gc>> {
-    let red_multiplier = args
-        .get(0)
-        .unwrap_or(&Value::Number(1.into()))
-        .coerce_to_f64(activation)?;
-    let green_multiplier = args
-        .get(1)
-        .unwrap_or(&Value::Number(1.into()))
-        .coerce_to_f64(activation)?;
-    let blue_multiplier = args
-        .get(2)
-        .unwrap_or(&Value::Number(1.into()))
-        .coerce_to_f64(activation)?;
-    let alpha_multiplier = args
-        .get(3)
-        .unwrap_or(&Value::Number(1.into()))
-        .coerce_to_f64(activation)?;
-    let red_offset = args
-        .get(4)
-        .unwrap_or(&Value::Number(0.into()))
-        .coerce_to_f64(activation)?;
-    let green_offset = args
-        .get(5)
-        .unwrap_or(&Value::Number(0.into()))
-        .coerce_to_f64(activation)?;
-    let blue_offset = args
-        .get(6)
-        .unwrap_or(&Value::Number(0.into()))
-        .coerce_to_f64(activation)?;
-    let alpha_offset = args
-        .get(7)
-        .unwrap_or(&Value::Number(0.into()))
-        .coerce_to_f64(activation)?;
+    let red_multiplier = args.get(0).unwrap_or(&1.into()).coerce_to_f64(activation)?;
+    let green_multiplier = args.get(1).unwrap_or(&1.into()).coerce_to_f64(activation)?;
+    let blue_multiplier = args.get(2).unwrap_or(&1.into()).coerce_to_f64(activation)?;
+    let alpha_multiplier = args.get(3).unwrap_or(&1.into()).coerce_to_f64(activation)?;
+    let red_offset = args.get(4).unwrap_or(&0.into()).coerce_to_f64(activation)?;
+    let green_offset = args.get(5).unwrap_or(&0.into()).coerce_to_f64(activation)?;
+    let blue_offset = args.get(6).unwrap_or(&0.into()).coerce_to_f64(activation)?;
+    let alpha_offset = args.get(7).unwrap_or(&0.into()).coerce_to_f64(activation)?;
 
     if let Some(ct) = this.as_color_transform_object() {
         ct.set_red_multiplier(activation.context.gc_context, red_multiplier);
@@ -150,7 +125,7 @@ pub fn get_rgb<'gc>(
         let rgb = ((ct.get_red_offset() as u32) << 16)
             | ((ct.get_green_offset() as u32) << 8)
             | (ct.get_blue_offset() as u32);
-        Ok(Value::Number(rgb.into()))
+        Ok(rgb.into())
     } else {
         Ok(Value::Undefined)
     }
@@ -165,15 +140,12 @@ pub fn set_rgb<'gc>(
         .get(0)
         .unwrap_or(&Value::Undefined)
         .coerce_to_u32(activation)?;
-
-    let red = ((new_rgb >> 16) & 0xFF) as f64;
-    let green = ((new_rgb >> 8) & 0xFF) as f64;
-    let blue = (new_rgb & 0xFF) as f64;
+    let [b, g, r, _] = new_rgb.to_le_bytes();
 
     if let Some(ct) = this.as_color_transform_object() {
-        ct.set_red_offset(activation.context.gc_context, red);
-        ct.set_green_offset(activation.context.gc_context, green);
-        ct.set_blue_offset(activation.context.gc_context, blue);
+        ct.set_red_offset(activation.context.gc_context, r.into());
+        ct.set_green_offset(activation.context.gc_context, g.into());
+        ct.set_blue_offset(activation.context.gc_context, b.into());
 
         ct.set_red_multiplier(activation.context.gc_context, 0.0);
         ct.set_green_multiplier(activation.context.gc_context, 0.0);
@@ -208,7 +180,7 @@ macro_rules! color_transform_value_accessor {
                 _args: &[Value<'gc>],
             ) -> Result<Value<'gc>, Error<'gc>> {
                 if let Some(ct) = this.as_color_transform_object() {
-                    Ok(Value::Number(ct.$get_ident()).into())
+                    Ok(ct.$get_ident().into())
                 } else {
                     Ok(Value::Undefined)
                 }
@@ -235,36 +207,8 @@ pub fn create_proto<'gc>(
 ) -> Object<'gc> {
     let color_transform_object =
         ColorTransformObject::empty_color_transform_object(gc_context, Some(proto));
-    let mut object = color_transform_object.as_script_object().unwrap();
-
-    with_color_transform!(object, gc_context, fn_proto,
-        "alphaMultiplier" => [get_alpha_multiplier, set_alpha_multiplier],
-        "redMultiplier" => [get_red_multiplier, set_red_multiplier],
-        "greenMultiplier" => [get_green_multiplier, set_green_multiplier],
-        "blueMultiplier" => [get_blue_multiplier, set_blue_multiplier],
-        "alphaOffset" => [get_alpha_offset, set_alpha_offset],
-        "redOffset" => [get_red_offset, set_red_offset],
-        "greenOffset" => [get_green_offset, set_green_offset],
-        "blueOffset" => [get_blue_offset, set_blue_offset],
-        "rgb" => [get_rgb, set_rgb],
-    );
-
-    object.force_set_function(
-        "concat",
-        concat,
-        gc_context,
-        Attribute::empty(),
-        Some(fn_proto),
-    );
-
-    object.force_set_function(
-        "toString",
-        to_string,
-        gc_context,
-        Attribute::empty(),
-        Some(fn_proto),
-    );
-
+    let object = color_transform_object.as_script_object().unwrap();
+    define_properties_on(PROTO_DECLS, gc_context, object, fn_proto);
     color_transform_object.into()
 }
 
@@ -284,10 +228,7 @@ fn to_string<'gc>(
             this.get("alphaOffset", activation)?.coerce_to_string(activation)?
     );
 
-    Ok(Value::String(AvmString::new(
-        activation.context.gc_context,
-        formatted,
-    )))
+    Ok(AvmString::new(activation.context.gc_context, formatted).into())
 }
 
 fn concat<'gc>(

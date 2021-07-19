@@ -37,23 +37,19 @@ function transformManifest(content, env) {
     return JSON.stringify(manifest);
 }
 
-module.exports = (env, argv) => {
-    let mode = "production";
-    if (argv && argv.mode) {
-        mode = argv.mode;
-    }
-
+module.exports = (env, _argv) => {
+    const mode = process.env.NODE_ENV || "production";
     console.log(`Building ${mode}...`);
 
     return {
         mode,
         entry: {
-            popup: "./src/popup.js",
-            options: "./src/options.js",
-            content: "./src/content.js",
-            ruffle: "./src/ruffle.js",
-            background: "./src/background.js",
-            player: "./src/player.js",
+            popup: "./src/popup.ts",
+            options: "./src/options.ts",
+            content: "./src/content.ts",
+            ruffle: "./src/ruffle.ts",
+            background: "./src/background.ts",
+            player: "./src/player.ts",
         },
         output: {
             path: path.resolve(__dirname, "assets/dist/"),
@@ -63,10 +59,17 @@ module.exports = (env, argv) => {
         module: {
             rules: [
                 {
+                    test: /\.ts$/i,
+                    use: "ts-loader",
+                },
+                {
                     test: /\.wasm$/i,
                     type: "asset/resource",
                 },
             ],
+        },
+        resolve: {
+            extensions: [".ts", "..."],
         },
         plugins: [
             new CopyPlugin({

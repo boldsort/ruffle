@@ -139,15 +139,15 @@ impl<'gc> Value<'gc> {
     /// * In SWF5 and lower, hexadecimal is unsupported.
     fn primitive_as_number(&self, activation: &mut Activation<'_, 'gc, '_>) -> f64 {
         match self {
-            Value::Undefined if activation.current_swf_version() < 7 => 0.0,
-            Value::Null if activation.current_swf_version() < 7 => 0.0,
+            Value::Undefined if activation.swf_version() < 7 => 0.0,
+            Value::Null if activation.swf_version() < 7 => 0.0,
             Value::Undefined => f64::NAN,
             Value::Null => f64::NAN,
             Value::Bool(false) => 0.0,
             Value::Bool(true) => 1.0,
             Value::Number(v) => *v,
             Value::String(v) => match v.as_str() {
-                v if activation.current_swf_version() >= 6 && v.starts_with("0x") => {
+                v if activation.swf_version() >= 6 && v.starts_with("0x") => {
                     let mut n: u32 = 0;
                     for c in v[2..].bytes() {
                         n = n.wrapping_shl(4);
@@ -173,7 +173,7 @@ impl<'gc> Value<'gc> {
                     }
                     f64::from(n as i32)
                 }
-                v if activation.current_swf_version() >= 6
+                v if activation.swf_version() >= 6
                     && (v.starts_with('0') || v.starts_with("+0") || v.starts_with("-0"))
                     && v[1..].bytes().all(|c| c >= b'0' && c <= b'7') =>
                 {
@@ -194,7 +194,7 @@ impl<'gc> Value<'gc> {
                     // (as of nightly 4/13, Rust also accepts "infinity")
                     // Check if the strign starts with 'i' (ignoring any leading +/-).
                     if v.strip_prefix(['+', '-'].as_ref())
-                        .unwrap_or(&v)
+                        .unwrap_or(v)
                         .starts_with(['i', 'I'].as_ref())
                     {
                         f64::NAN
@@ -311,10 +311,10 @@ impl<'gc> Value<'gc> {
             (Value::String(a), Value::String(b)) => Ok((**a == **b).into()),
             (Value::Bool(a), Value::Bool(b)) => Ok((a == b).into()),
             (Value::Object(a), Value::Object(b)) => Ok(Object::ptr_eq(*a, *b).into()),
-            (Value::Object(a), Value::Null) | (Value::Object(a), Value::Undefined) => {
+            (Value::Object(a), Value::Undefined | Value::Null) => {
                 Ok(Object::ptr_eq(*a, activation.context.avm1.global_object_cell()).into())
             }
-            (Value::Null, Value::Object(b)) | (Value::Undefined, Value::Object(b)) => {
+            (Value::Undefined | Value::Null, Value::Object(b)) => {
                 Ok(Object::ptr_eq(*b, activation.context.avm1.global_object_cell()).into())
             }
             (Value::Undefined, Value::Null) => Ok(true.into()),
@@ -379,9 +379,9 @@ impl<'gc> Value<'gc> {
         // e.g. SWF19 p. 72:
         // "If the numbers are equal, true is pushed to the stack for SWF 5 and later. For SWF 4, 1 is pushed to the stack."
         if swf_version >= 5 {
-            Value::Bool(value)
+            value.into()
         } else {
-            Value::Number(if value { 1.0 } else { 0.0 })
+            (value as i32).into()
         }
     }
 
@@ -441,7 +441,7 @@ impl<'gc> Value<'gc> {
                 _ => "[type Object]".into(),
             },
             Value::Undefined => {
-                if activation.current_swf_version() >= 7 {
+                if activation.swf_version() >= 7 {
                     "undefined".into()
                 } else {
                     "".into()
@@ -544,7 +544,7 @@ mod test {
                 _: Object<'gc>,
                 _: &[Value<'gc>],
             ) -> Result<Value<'gc>, Error<'gc>> {
-                Ok(5.0.into())
+                Ok(5.into())
             }
 
             let valueof = FunctionObject::function(
@@ -564,7 +564,7 @@ mod test {
 
             assert_eq!(
                 Value::Object(o).to_primitive_num(activation).unwrap(),
-                Value::Number(5.0)
+                5.into()
             );
 
             Ok(())
@@ -621,22 +621,19 @@ mod test {
             let a = Value::Number(1.0);
             let b = Value::Number(2.0);
 
-            assert_eq!(a.abstract_lt(b, activation).unwrap(), Value::Bool(true));
+            assert_eq!(a.abstract_lt(b, activation).unwrap(), true.into());
 
             let nan = Value::Number(f64::NAN);
             assert_eq!(a.abstract_lt(nan, activation).unwrap(), Value::Undefined);
 
             let inf = Value::Number(f64::INFINITY);
-            assert_eq!(a.abstract_lt(inf, activation).unwrap(), Value::Bool(true));
+            assert_eq!(a.abstract_lt(inf, activation).unwrap(), true.into());
 
             let neg_inf = Value::Number(f64::NEG_INFINITY);
-            assert_eq!(
-                a.abstract_lt(neg_inf, activation).unwrap(),
-                Value::Bool(false)
-            );
+            assert_eq!(a.abstract_lt(neg_inf, activation).unwrap(), false.into());
 
             let zero = Value::Number(0.0);
-            assert_eq!(a.abstract_lt(zero, activation).unwrap(), Value::Bool(false));
+            assert_eq!(a.abstract_lt(zero, activation).unwrap(), false.into());
 
             Ok(())
         });
@@ -648,22 +645,19 @@ mod test {
             let a = Value::Number(1.0);
             let b = Value::Number(2.0);
 
-            assert_eq!(b.abstract_lt(a, activation).unwrap(), Value::Bool(false));
+            assert_eq!(b.abstract_lt(a, activation).unwrap(), false.into());
 
             let nan = Value::Number(f64::NAN);
             assert_eq!(nan.abstract_lt(a, activation).unwrap(), Value::Undefined);
 
             let inf = Value::Number(f64::INFINITY);
-            assert_eq!(inf.abstract_lt(a, activation).unwrap(), Value::Bool(false));
+            assert_eq!(inf.abstract_lt(a, activation).unwrap(), false.into());
 
             let neg_inf = Value::Number(f64::NEG_INFINITY);
-            assert_eq!(
-                neg_inf.abstract_lt(a, activation).unwrap(),
-                Value::Bool(true)
-            );
+            assert_eq!(neg_inf.abstract_lt(a, activation).unwrap(), true.into());
 
             let zero = Value::Number(0.0);
-            assert_eq!(zero.abstract_lt(a, activation).unwrap(), Value::Bool(true));
+            assert_eq!(zero.abstract_lt(a, activation).unwrap(), true.into());
 
             Ok(())
         });
@@ -681,7 +675,7 @@ mod test {
                 "b".to_owned(),
             ));
 
-            assert_eq!(a.abstract_lt(b, activation).unwrap(), Value::Bool(true));
+            assert_eq!(a.abstract_lt(b, activation).unwrap(), true.into());
 
             Ok(())
         })
@@ -699,7 +693,7 @@ mod test {
                 "b".to_owned(),
             ));
 
-            assert_eq!(b.abstract_lt(a, activation).unwrap(), Value::Bool(false));
+            assert_eq!(b.abstract_lt(a, activation).unwrap(), false.into());
 
             Ok(())
         })

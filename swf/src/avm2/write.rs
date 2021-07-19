@@ -1,3 +1,5 @@
+#![allow(clippy::unusual_byte_groupings)]
+
 use crate::avm2::opcode::OpCode;
 use crate::avm2::types::*;
 use crate::string::SwfStr;
@@ -63,8 +65,8 @@ impl<W: Write> SwfWriteExt for Writer<W> {
 }
 
 impl<W: Write> Writer<W> {
-    pub fn new(output: W) -> Writer<W> {
-        Writer { output }
+    pub fn new(output: W) -> Self {
+        Self { output }
     }
 
     pub fn write(&mut self, abc_file: AbcFile) -> Result<()> {
@@ -124,13 +126,10 @@ impl<W: Write> Writer<W> {
         Ok(())
     }
 
-    #[allow(dead_code)]
     fn write_i24(&mut self, n: i32) -> Result<()> {
-        // TODO: Verify n fits in 24-bits.
-        self.write_u8(((n >> 16) & 0xff) as u8)?;
-        self.write_u8(((n >> 8) & 0xff) as u8)?;
-        self.write_u8((n & 0xff) as u8)?;
-        Ok(())
+        let bytes = n.to_le_bytes();
+        debug_assert!(bytes[3] == 0 || bytes[3] == 0xFF);
+        self.output.write_all(&bytes[..3])
     }
 
     fn write_i32(&mut self, n: i32) -> Result<()> {
@@ -1038,5 +1037,22 @@ pub mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn write_i24() {
+        let write = |n: i32| {
+            let mut out = vec![];
+            {
+                let mut writer = Writer::new(&mut out);
+                writer.write_i24(n).unwrap();
+            }
+            out
+        };
+
+        assert_eq!(write(0), &[0, 0, 0]);
+        assert_eq!(write(2), &[2, 0, 0]);
+        assert_eq!(write(77777), &[0b1101_0001, 0b0010_1111, 0b0000_0001]);
+        assert_eq!(write(-77777), &[0b0010_1111, 0b1101_0000, 0b1111_1110]);
     }
 }

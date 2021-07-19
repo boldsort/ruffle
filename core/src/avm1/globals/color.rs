@@ -6,10 +6,18 @@
 use crate::avm1::activation::Activation;
 use crate::avm1::error::Error;
 use crate::avm1::property::Attribute;
+use crate::avm1::property_decl::{define_properties_on, Declaration};
 use crate::avm1::{Object, ScriptObject, TObject, Value};
 use crate::display_object::{DisplayObject, TDisplayObject};
 use gc_arena::MutationContext;
 use swf::Fixed8;
+
+const PROTO_DECLS: &[Declaration] = declare_properties! {
+    "getRGB" => method(get_rgb; DONT_ENUM | DONT_DELETE | READ_ONLY);
+    "getTransform" => method(get_transform; DONT_ENUM | DONT_DELETE | READ_ONLY);
+    "setRGB" => method(set_rgb; DONT_ENUM | DONT_DELETE | READ_ONLY);
+    "setTransform" => method(set_transform; DONT_ENUM | DONT_DELETE | READ_ONLY);
+};
 
 pub fn constructor<'gc>(
     activation: &mut Activation<'_, 'gc, '_>,
@@ -19,14 +27,12 @@ pub fn constructor<'gc>(
     // The target display object that this color will modify.
     let target = args.get(0).cloned().unwrap_or(Value::Undefined);
     // Set undocumented `target` property
-    this.set("target", target, activation)?;
-    this.set_attributes(
+    this.define_value(
         activation.context.gc_context,
-        Some("target"),
+        "target",
+        target,
         Attribute::DONT_DELETE | Attribute::READ_ONLY | Attribute::DONT_ENUM,
-        Attribute::empty(),
     );
-
     Ok(this.into())
 }
 
@@ -35,40 +41,8 @@ pub fn create_proto<'gc>(
     proto: Object<'gc>,
     fn_proto: Object<'gc>,
 ) -> Object<'gc> {
-    let mut object = ScriptObject::object(gc_context, Some(proto));
-
-    object.force_set_function(
-        "getRGB",
-        get_rgb,
-        gc_context,
-        Attribute::DONT_DELETE | Attribute::READ_ONLY | Attribute::DONT_ENUM,
-        Some(fn_proto),
-    );
-
-    object.force_set_function(
-        "getTransform",
-        get_transform,
-        gc_context,
-        Attribute::DONT_DELETE | Attribute::READ_ONLY | Attribute::DONT_ENUM,
-        Some(fn_proto),
-    );
-
-    object.force_set_function(
-        "setRGB",
-        set_rgb,
-        gc_context,
-        Attribute::DONT_DELETE | Attribute::READ_ONLY | Attribute::DONT_ENUM,
-        Some(fn_proto),
-    );
-
-    object.force_set_function(
-        "setTransform",
-        set_transform,
-        gc_context,
-        Attribute::DONT_DELETE | Attribute::READ_ONLY | Attribute::DONT_ENUM,
-        Some(fn_proto),
-    );
-
+    let object = ScriptObject::object(gc_context, Some(proto));
+    define_properties_on(PROTO_DECLS, gc_context, object, fn_proto);
     object.into()
 }
 
@@ -154,21 +128,20 @@ fn set_rgb<'gc>(
 ) -> Result<Value<'gc>, Error<'gc>> {
     if let Some(target) = target(activation, this)? {
         target.set_transformed_by_script(activation.context.gc_context, true);
-        let mut color_transform = target.color_transform_mut(activation.context.gc_context);
+
         let rgb = args
             .get(0)
             .unwrap_or(&Value::Undefined)
             .coerce_to_i32(activation)? as i32;
-        let r = (rgb >> 16) & 0xff;
-        let g = (rgb >> 8) & 0xff;
-        let b = rgb & 0xff;
+        let [b, g, r, _] = rgb.to_le_bytes();
 
+        let mut color_transform = target.color_transform_mut(activation.context.gc_context);
         color_transform.r_mult = Fixed8::ZERO;
         color_transform.g_mult = Fixed8::ZERO;
         color_transform.b_mult = Fixed8::ZERO;
-        color_transform.r_add = r as i16;
-        color_transform.g_add = g as i16;
-        color_transform.b_add = b as i16;
+        color_transform.r_add = r.into();
+        color_transform.g_add = g.into();
+        color_transform.b_add = b.into();
     }
     Ok(Value::Undefined)
 }

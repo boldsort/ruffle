@@ -1,3 +1,5 @@
+#![allow(clippy::unusual_byte_groupings)]
+
 use crate::avm2::types::*;
 use crate::error::{Error, Result};
 use crate::extensions::ReadSwfExt;
@@ -15,7 +17,7 @@ impl<'a> ReadSwfExt<'a> for Reader<'a> {
 
     #[inline(always)]
     fn as_slice(&self) -> &'a [u8] {
-        &self.input
+        self.input
     }
 }
 
@@ -88,8 +90,8 @@ impl<'a> Reader<'a> {
     }
 
     fn read_i24(&mut self) -> Result<i32> {
-        Ok(i32::from(self.read_u8()? as i8)
-            | (i32::from(self.read_u8()? as i8) << 8)
+        Ok(i32::from(self.read_u8()?)
+            | (i32::from(self.read_u8()?) << 8)
             | (i32::from(self.read_u8()? as i8) << 16))
     }
 
@@ -98,12 +100,10 @@ impl<'a> Reader<'a> {
     }
 
     fn read_string(&mut self) -> Result<String> {
-        let len = self.read_u30()? as usize;
-        let mut s = String::with_capacity(len);
-        self.input
-            .by_ref()
-            .take(len as u64)
-            .read_to_string(&mut s)?;
+        let len = self.read_u30()?;
+        // TODO: Avoid allocating a String.
+        let mut s = String::with_capacity(len as usize);
+        self.read_slice(len as usize)?.read_to_string(&mut s)?;
         Ok(s)
     }
 
@@ -472,11 +472,8 @@ impl<'a> Reader<'a> {
 
         // Read the code data.
         let code_len = self.read_u30()?;
-        let mut code = Vec::with_capacity(code_len as usize);
-        self.input
-            .by_ref()
-            .take(code_len.into())
-            .read_to_end(&mut code)?;
+        // TODO: Avoid allocating a Vec.
+        let code = self.read_slice(code_len as usize)?.to_vec();
 
         let num_exceptions = self.read_u30()? as usize;
         let mut exceptions = Vec::with_capacity(num_exceptions);
@@ -914,6 +911,15 @@ pub mod tests {
             ]),
             0b1111_0000000_0000000_0000000_0000000
         );
+    }
+
+    #[test]
+    fn read_i24() {
+        let read = |data: &[u8]| Reader::new(data).read_i24().unwrap();
+        assert_eq!(read(&[0, 0, 0]), 0);
+        assert_eq!(read(&[2, 0, 0]), 2);
+        assert_eq!(read(&[0b1101_0001, 0b0010_1111, 0b0000_0001]), 77777);
+        assert_eq!(read(&[0b0010_1111, 0b1101_0000, 0b1111_1110]), -77777);
     }
 
     #[test]
